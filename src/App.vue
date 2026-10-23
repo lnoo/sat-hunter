@@ -71,7 +71,7 @@
           </div>
           <Select
             :modelValue="searchQuery"
-            :options="allRegions"
+            :options="regionOptions"
             @update:modelValue="selectRegion"
             placeholder="选择或输入区域关键字" />
         </div>
@@ -117,13 +117,14 @@
 
           <input
             type="range"
-            min="6"
+            min="1"
             max="18"
             v-model.number="zoomLevel"
             class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600 dark:bg-gray-700" />
 
           <div
             class="flex justify-between mt-2 text-[10px] text-gray-400 dark:text-gray-500">
+            <span>全球 (1-3)</span>
             <span>国家级 (6)</span>
             <span>省市级 (10)</span>
             <span>街道级 (18)</span>
@@ -228,7 +229,7 @@
   }
 
   interface RegionItem {
-    adcode: number;
+    adcode: number | string;
     name: string;
     center: [number, number];
     centroid: [number, number];
@@ -251,6 +252,32 @@
     labelOptions?: L.TileLayerOptions;
   }
 
+  // 内置"全世界"选项：adcode 使用字符串哨兵值，避免与真实行政区划冲突
+  const WORLD_ADCODE = "world";
+
+  const WORLD_REGION: RegionItem = {
+    adcode: WORLD_ADCODE,
+    name: "全世界 (World)",
+    center: [20, 0],
+    centroid: [20, 0],
+    level: "世界",
+    bbox: [-180, -85, 180, 85],
+  };
+
+  // 全球范围 GeoJSON（留出极区空白，Web 墨卡托在 ±90° 无法投影）
+  const WORLD_GEOJSON: GeoJSONResult = {
+    type: "Polygon",
+    coordinates: [
+      [
+        [-180, -85],
+        [180, -85],
+        [180, 85],
+        [-180, 85],
+        [-180, -85],
+      ],
+    ],
+  };
+
   const mapContainer = ref<HTMLElement | null>(null);
   const map = shallowRef<L.Map | null>(null);
   const cityLayer = shallowRef<L.Layer | null>(null);
@@ -258,7 +285,7 @@
   const baseMapLayer = shallowRef<L.TileLayer | null>(null);
   const labelLayer = shallowRef<L.TileLayer | null>(null);
 
-  const searchQuery = ref<number>();
+  const searchQuery = ref<number | string>();
   const allRegions = ref<RegionItem[]>([]);
   const isRegionLoading = ref(false);
   const regionLoadError = ref("");
@@ -327,9 +354,15 @@
     },
   ];
 
-  const selectedData = computed(() =>
-    allRegions.value.find((op) => op.adcode === searchQuery.value),
-  );
+  const regionOptions = computed<RegionItem[]>(() => [
+    WORLD_REGION,
+    ...allRegions.value,
+  ]);
+
+  const selectedData = computed<RegionItem | undefined>(() => {
+    if (searchQuery.value === WORLD_ADCODE) return WORLD_REGION;
+    return allRegions.value.find((op) => op.adcode === searchQuery.value);
+  });
 
   const modeText = computed(() => {
     if (currentMode.value === "rect") return "当前模式: 矩形框选";
@@ -498,9 +531,29 @@
     updateEstimate();
   };
 
-  const selectRegion = (adcode: number) => {
+  const selectRegion = (adcode: number | string) => {
     searchQuery.value = adcode;
     searchError.value = "";
+
+    // 内置"全世界"：无需请求轮廓数据，直接使用全球范围
+    if (adcode === WORLD_ADCODE) {
+      zoomLevel.value = 4;
+      clearAllLayers(false);
+      setMode("polygon");
+      cityGeoJSON.value = WORLD_GEOJSON;
+      if (map.value) {
+        const layer = L.geoJSON(WORLD_GEOJSON as any, {
+          style: { color: "#ef4444", weight: 2, fillOpacity: 0.05 },
+          interactive: false,
+        }).addTo(map.value);
+        cityLayer.value = layer;
+        map.value.fitBounds(layer.getBounds());
+        updateEstimate();
+        statusText.value = "已选中: 全世界";
+      }
+      return;
+    }
+
     const level = { country: 6, province: 10, city: 10, district: 14 }?.[
       selectedData.value?.level ?? ""
     ];
@@ -511,7 +564,7 @@
     searchLocation(adcode);
   };
 
-  const searchLocation = async (adcode: number) => {
+  const searchLocation = async (adcode: number | string) => {
     // 搜索时清除之前的框
     clearAllLayers(false);
     setMode("polygon");
@@ -583,6 +636,10 @@
     }
   };
 
+  // 判断当前是否为"全世界"范围
+  const isWorldRange = () =>
+    currentMode.value === "polygon" && searchQuery.value === WORLD_ADCODE;
+
   const updateEstimate = () => {
     let bounds: L.LatLngBounds | null = null;
 
@@ -601,6 +658,20 @@
     }
 
     const z = zoomLevel.value;
+
+    // 全世界：横向瓦片数固定为 2^z，纵向取实际范围
+    if (isWorldRange()) {
+      const se = bounds.getSouthEast();
+      const tMaxY = latLonToTile(se.lat, se.lng, z).y;
+      const maxY = Math.min(
+        Math.max(tMaxY, 0),
+        Math.pow(2, z) - 1,
+      );
+      tileCount.value = Math.pow(2, z) * (maxY + 1);
+      statusText.value = `预计瓦片: ${tileCount.value} 张 (全世界)`;
+      return;
+    }
+
     const nw = bounds.getNorthWest();
     const se = bounds.getSouthEast();
     const tMin = latLonToTile(nw.lat, nw.lng, z);
@@ -638,10 +709,11 @@
     const tMin = latLonToTile(nw.lat, nw.lng, z);
     const tMax = latLonToTile(se.lat, se.lng, z);
 
-    const minX = Math.min(tMin.x, tMax.x);
-    const maxX = Math.max(tMin.x, tMax.x);
-    const minY = Math.min(tMin.y, tMax.y);
-    const maxY = Math.max(tMin.y, tMax.y);
+    const tileLimit = Math.pow(2, z);
+    const minX = Math.max(0, Math.min(tMin.x, tMax.x));
+    const maxX = Math.min(tileLimit - 1, Math.max(tMin.x, tMax.x));
+    const minY = Math.max(0, Math.min(tMin.y, tMax.y));
+    const maxY = Math.min(tileLimit - 1, Math.max(tMin.y, tMax.y));
 
     const tilesX = maxX - minX + 1;
     const tilesY = maxY - minY + 1;
@@ -658,7 +730,6 @@
     }
 
     let loaded = 0;
-    const promises: Promise<void>[] = [];
     const activeBaseMap =
       baseMapOptions.find((item) => item.id === currentBaseMap.value) ||
       baseMapOptions[0];
@@ -668,33 +739,53 @@
     }
     const tileBaseUrl = activeBaseMap.url;
 
+    // 待下载瓦片队列
+    const pendingTiles: TileCoord[] = [];
     for (let x = minX; x <= maxX; x++) {
       for (let y = minY; y <= maxY; y++) {
-        promises.push(
-          new Promise((resolve) => {
-            const img = new Image();
-            img.crossOrigin = "Anonymous";
-            img.src = tileBaseUrl
-              .replace("{z}", z.toString())
-              .replace("{y}", y.toString())
-              .replace("{x}", x.toString());
-
-            img.onload = () => {
-              ctx.drawImage(img, (x - minX) * 256, (y - minY) * 256);
-              loaded++;
-              downloadProgress.value = Math.floor((loaded / totalTiles) * 100);
-              resolve();
-            };
-            img.onerror = () => resolve();
-          }),
-        );
+        pendingTiles.push({ x, y });
       }
     }
 
-    await Promise.all(promises);
+    // 限制并发数，避免大范围（如全世界）一次性发起过多请求
+    const CONCURRENCY = 16;
+    const loadTile = (t: TileCoord) =>
+      new Promise<void>((resolve) => {
+        const img = new Image();
+        img.crossOrigin = "Anonymous";
+        img.src = tileBaseUrl
+          .replace("{z}", z.toString())
+          .replace("{y}", t.y.toString())
+          .replace("{x}", t.x.toString());
 
-    // 城市轮廓裁剪
-    if (currentMode.value === "polygon" && cityGeoJSON.value) {
+        img.onload = () => {
+          ctx.drawImage(img, (t.x - minX) * 256, (t.y - minY) * 256);
+          loaded++;
+          downloadProgress.value = Math.floor((loaded / totalTiles) * 100);
+          resolve();
+        };
+        img.onerror = () => resolve();
+      });
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(CONCURRENCY, pendingTiles.length) },
+        async () => {
+          while (pendingTiles.length > 0) {
+            const t = pendingTiles.shift();
+            if (!t) break;
+            await loadTile(t);
+          }
+        },
+      ),
+    );
+
+    // 城市轮廓裁剪（全世界范围本身就是标准瓦片范围，无需裁剪）
+    if (
+      currentMode.value === "polygon" &&
+      cityGeoJSON.value &&
+      !isWorldRange()
+    ) {
       statusText.value = "应用轮廓裁剪...";
       ctx.globalCompositeOperation = "destination-in";
       ctx.beginPath();
@@ -757,7 +848,7 @@
           a.href = url;
           const name =
             currentMode.value === "polygon"
-              ? searchQuery.value
+              ? selectedData.value?.name ?? "region"
               : "terra_snap_map";
           a.download = `${name}_z${z}.png`;
           document.body.appendChild(a);
