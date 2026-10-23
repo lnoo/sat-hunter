@@ -38,6 +38,15 @@
 - **主题适配**：
   - 支持 **暗色模式 (Dark Mode)**，根据系统设置自动切换或手动切换。
 
+## 🌐 在线使用
+
+应用已通过 GitHub Actions 自动发布到 GitHub Pages，无需本地安装即可直接使用：
+
+**https://lnoo.github.io/sat-hunter/**
+
+- 每次推送 `main` 分支都会自动构建并发布（见 `.github/workflows/publish.yml`）。
+- 也可在仓库 **Actions** 页面手动运行 "Deploy to GitHub Pages"。
+
 ## 🛠️ 技术栈
 
 - **前端框架**: [Vue 3](https://vuejs.org/) + [TypeScript](https://www.typescriptlang.org/)
@@ -50,32 +59,32 @@
 
 ### 环境要求
 
-- Node.js (推荐 v16+)
-- pnpm (推荐) 或 npm / yarn
+- Node.js (v20.19+ 或 v22.12+)
+- Bun (推荐) 或 pnpm / npm
 
 ### 安装步骤
 
 1. **克隆仓库**
 
    ```bash
-   git clone https://github.com/your-username/sat-hunter.git
+   git clone https://github.com/lnoo/sat-hunter.git
    cd sat-hunter
    ```
 
 2. **安装依赖**
 
    ```bash
-   pnpm install
+   bun install
    # 或者
-   npm install
+   pnpm install
    ```
 
 3. **启动开发服务器**
 
    ```bash
-   pnpm dev
+   bun run dev
    # 或者
-   npm run dev
+   pnpm dev
    ```
 
 4. **打开浏览器**
@@ -87,6 +96,8 @@
 构建生产环境版本：
 
 ```bash
+bun run build
+# 或者
 pnpm build
 ```
 
